@@ -13,20 +13,43 @@ enum AttentionAction {
 /// (and never over a full-screen app). A panel that never activates the app stays on top of
 /// whatever Space and window the user is currently in.
 private final class OverlayWindow: NSPanel {
+    var onCancel: (() -> Void)?
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    // Esc works from whichever overlay window happens to be key, card or not.
+    override func cancelOperation(_ sender: Any?) { onCancel?() }
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { onCancel?() } else { super.keyDown(with: event) }
+    }
 }
 
 /// Covers the screen(s) with a dimmed, always-on-top panel showing the due todo.
 final class AttentionOverlay {
-    private var windows: [NSWindow] = []
+    private var windows: [OverlayWindow] = []
     private var chimeTimer: Timer?
     private let settings = AppSettings.shared
+    private var currentTodo: Todo?
+    private var currentAction: ((AttentionAction) -> Void)?
+    private var screenObserver: Any?
 
     var isShowing: Bool { !windows.isEmpty }
 
+    init() {
+        // Displays plugged/unplugged or resolution changed while showing: rebuild so the card is never lost.
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.isShowing, let todo = self.currentTodo, let action = self.currentAction else { return }
+            self.show(todo: todo, onAction: action)
+        }
+    }
+
     func show(todo: Todo, onAction: @escaping (AttentionAction) -> Void) {
         dismiss()
+        currentTodo = todo
+        currentAction = onAction
 
         // The card goes on the screen the user is actually working on: the one under the mouse.
         let mouse = NSEvent.mouseLocation
@@ -56,9 +79,8 @@ final class AttentionOverlay {
             window.animationBehavior = .none
 
             let isActive = screen == activeScreen
-            let view = AttentionView(todo: todo, showsCard: isActive,
-                                     snoozeMinutes: settings.snoozeMinutes, onAction: onAction)
-            window.contentView = NSHostingView(rootView: view)
+            window.onCancel = { onAction(.dismiss) }
+            window.contentView = NSHostingView(rootView: makeView(for: window, showsCard: isActive))
             window.setFrame(screen.frame, display: true)
             window.orderFrontRegardless()
             if isActive { keyWindow = window }
@@ -66,7 +88,7 @@ final class AttentionOverlay {
         }
 
         // Take keyboard focus for Return / 1-2-3 / Esc without activating the app.
-        keyWindow?.makeKey()
+        (keyWindow ?? windows.first)?.makeKey()
 
         chime()
         let repeatEvery = settings.chimeRepeatSeconds
@@ -85,6 +107,26 @@ final class AttentionOverlay {
             w.contentView = nil
         }
         windows.removeAll()
+        currentTodo = nil
+        currentAction = nil
+    }
+
+    private func makeView(for window: OverlayWindow, showsCard: Bool) -> AttentionView {
+        AttentionView(
+            todo: currentTodo!,
+            showsCard: showsCard,
+            snoozeMinutes: settings.snoozeMinutes,
+            onAction: { [weak self] action in self?.currentAction?(action) },
+            onRequestCardHere: { [weak self] in self?.moveCard(to: window) }
+        )
+    }
+
+    /// User clicked a dimmed-only screen: put the card there and give it keyboard focus.
+    private func moveCard(to target: OverlayWindow) {
+        for w in windows {
+            w.contentView = NSHostingView(rootView: makeView(for: w, showsCard: w === target))
+        }
+        target.makeKey()
     }
 
     private func chime() {
@@ -99,6 +141,7 @@ struct AttentionView: View {
     let showsCard: Bool
     let snoozeMinutes: [Int]
     let onAction: (AttentionAction) -> Void
+    var onRequestCardHere: () -> Void = {}
 
     @State private var pulse = false
     @State private var appeared = false
@@ -110,12 +153,23 @@ struct AttentionView: View {
                 .background(.ultraThinMaterial)
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
-                .onTapGesture { /* swallow clicks so the desktop underneath can't be hit */ }
+                .onTapGesture {
+                    // Card screen: swallow clicks so the desktop underneath can't be hit.
+                    // Dim-only screen: bring the card over here.
+                    if !showsCard { onRequestCardHere() }
+                }
 
             if showsCard {
                 card
                     .scaleEffect(appeared ? 1 : 0.9)
                     .opacity(appeared ? 1 : 0)
+            } else {
+                Text("Click to show the reminder here · Esc to dismiss")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.35))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .padding(.bottom, 40)
+                    .allowsHitTesting(false)
             }
         }
         .onAppear {

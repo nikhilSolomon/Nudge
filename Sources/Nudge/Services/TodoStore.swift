@@ -127,6 +127,12 @@ final class TodoStore: ObservableObject {
         update(id) { $0.lastFiredAt = Date() }
     }
 
+    /// Forget that a reminder was shown so it fires again on the next tick
+    /// (used when the overlay is torn down by a screen lock or sleep).
+    func resetFired(_ id: UUID) {
+        update(id) { $0.lastFiredAt = nil }
+    }
+
     func delete(_ id: UUID) {
         todos.removeAll { $0.id == id }
     }
@@ -135,11 +141,15 @@ final class TodoStore: ObservableObject {
         todos.removeAll { $0.isDone }
     }
 
-    /// The next todo whose reminder time has passed and hasn't been shown yet.
-    func nextDueToFire() -> Todo? {
+    /// All todos whose reminder time has passed and haven't been shown yet, earliest first.
+    func dueToFire() -> [Todo] {
         todos.filter { $0.isDueToFire }
             .sorted { ($0.reminderAt ?? .distantPast) < ($1.reminderAt ?? .distantPast) }
-            .first
+    }
+
+    /// The next todo whose reminder time has passed and hasn't been shown yet.
+    func nextDueToFire() -> Todo? {
+        dueToFire().first
     }
 
     private func update(_ id: UUID, _ change: (inout Todo) -> Void) {
