@@ -1,45 +1,33 @@
 import Foundation
-import Security
 
-/// Minimal generic-password Keychain wrapper for storing the sync session.
+/// Session storage for the sync sign-in.
+///
+/// Stored as a 0600 file in Application Support rather than the Keychain: this app is ad-hoc
+/// signed, so every rebuild gets a new code identity and the Keychain would prompt for the login
+/// password on each launch. The file is readable only by the current user.
 enum Keychain {
-    private static let service = "dev.local.Nudge"
+    private static var dir: URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let d = support.appendingPathComponent("Nudge", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }
+
+    private static func url(_ key: String) -> URL {
+        dir.appendingPathComponent(key.replacingOccurrences(of: "/", with: "_") + ".secret")
+    }
 
     static func save(_ data: Data, key: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-        ]
-        let attrs: [String: Any] = [kSecValueData as String: data]
-        let status = SecItemUpdate(query as CFDictionary, attrs as CFDictionary)
-        if status == errSecItemNotFound {
-            var add = query
-            add[kSecValueData as String] = data
-            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-            SecItemAdd(add as CFDictionary, nil)
-        }
+        let u = url(key)
+        try? data.write(to: u, options: [.atomic])
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: u.path)
     }
 
     static func load(key: String) -> Data? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else { return nil }
-        return item as? Data
+        try? Data(contentsOf: url(key))
     }
 
     static func delete(key: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-        ]
-        SecItemDelete(query as CFDictionary)
+        try? FileManager.default.removeItem(at: url(key))
     }
 }
