@@ -19,8 +19,11 @@ final class TodoStore: ObservableObject {
 
     // MARK: Derived lists
 
+    /// Everything that isn't a delete tombstone.
+    var live: [Todo] { todos.filter { !$0.isDeleted } }
+
     var pending: [Todo] {
-        todos.filter { !$0.isDone }.sorted { a, b in
+        live.filter { !$0.isDone }.sorted { a, b in
             switch (a.reminderAt, b.reminderAt) {
             case let (x?, y?): return x != y ? x < y : a.createdAt < b.createdAt
             case (_?, nil): return true
@@ -31,7 +34,7 @@ final class TodoStore: ObservableObject {
     }
 
     var completed: [Todo] {
-        todos.filter { $0.isDone }.sorted { ($0.completedAt ?? .distantPast) > ($1.completedAt ?? .distantPast) }
+        live.filter { $0.isDone }.sorted { ($0.completedAt ?? .distantPast) > ($1.completedAt ?? .distantPast) }
     }
 
     /// Pending todos bucketed by DayGroup, in display order, empty groups omitted.
@@ -47,7 +50,7 @@ final class TodoStore: ObservableObject {
     }
 
     func todo(_ id: UUID) -> Todo? {
-        todos.first { $0.id == id }
+        todos.first { $0.id == id && !$0.isDeleted }
     }
 
     // MARK: Mutations
@@ -124,21 +127,30 @@ final class TodoStore: ObservableObject {
     }
 
     func markFired(_ id: UUID) {
-        update(id) { $0.lastFiredAt = Date() }
+        update(id, touch: false) { $0.lastFiredAt = Date() }
     }
 
     /// Forget that a reminder was shown so it fires again on the next tick
     /// (used when the overlay is torn down by a screen lock or sleep).
     func resetFired(_ id: UUID) {
-        update(id) { $0.lastFiredAt = nil }
+        update(id, touch: false) { $0.lastFiredAt = nil }
     }
 
+    /// Soft delete: keeps a tombstone so the deletion syncs to other devices.
     func delete(_ id: UUID) {
-        todos.removeAll { $0.id == id }
+        update(id) { $0.deletedAt = Date() }
     }
 
     func clearCompleted() {
-        todos.removeAll { $0.isDone }
+        let now = Date()
+        todos = todos.map { t in
+            guard t.isDone, !t.isDeleted else { return t }
+            var c = t
+            c.deletedAt = now
+            c.updatedAt = now
+            c.dirty = true
+            return c
+        }
     }
 
     /// All todos whose reminder time has passed and haven't been shown yet, earliest first.
@@ -152,11 +164,70 @@ final class TodoStore: ObservableObject {
         dueToFire().first
     }
 
-    private func update(_ id: UUID, _ change: (inout Todo) -> Void) {
+    /// `touch` = this is a user-visible change that should sync (bumps updatedAt, marks dirty).
+    private func update(_ id: UUID, touch: Bool = true, _ change: (inout Todo) -> Void) {
         guard let idx = todos.firstIndex(where: { $0.id == id }) else { return }
         var copy = todos[idx]
         change(&copy)
+        if touch {
+            copy.updatedAt = Date()
+            copy.dirty = true
+        }
         todos[idx] = copy
+    }
+
+    // MARK: Sync support
+
+    var dirtyTodos: [Todo] { todos.filter { $0.dirty } }
+
+    /// On first sign-in: offer every local todo to the server.
+    func markAllDirty() {
+        todos = todos.map { var c = $0; c.dirty = true; return c }
+    }
+
+    /// Merge rows pulled from the server. Newer `updatedAt` wins; local reminder "already fired"
+    /// state is kept unless the reminder time itself changed.
+    func applyRemote(_ remotes: [Todo]) {
+        guard !remotes.isEmpty else { return }
+        var list = todos
+        var index: [UUID: Int] = [:]
+        for (i, t) in list.enumerated() { index[t.id] = i }
+
+        for var remote in remotes {
+            remote.dirty = false
+            if let i = index[remote.id] {
+                let local = list[i]
+                guard remote.updatedAt > local.updatedAt else { continue }
+                remote.lastFiredAt = (remote.reminderAt == local.reminderAt) ? local.lastFiredAt : nil
+                list[i] = remote
+            } else if !remote.isDeleted {
+                remote.lastFiredAt = nil
+                index[remote.id] = list.count
+                list.append(remote)
+            }
+        }
+        todos = list
+    }
+
+    /// After a successful push: clear dirty on rows that haven't changed since the snapshot was taken.
+    func markPushed(_ pushed: [Todo]) {
+        let snapshot = Dictionary(uniqueKeysWithValues: pushed.map { ($0.id, $0.updatedAt) })
+        todos = todos.map { t in
+            guard let at = snapshot[t.id], at == t.updatedAt else { return t }
+            var c = t
+            c.dirty = false
+            return c
+        }
+    }
+
+    /// Drop everything local that came from the server (on sign-out keep local copies, so this is
+    /// only used when switching accounts).
+    func purgeTombstones(olderThan days: Int = 60) {
+        let cutoff = Date().addingTimeInterval(-Double(days) * 86400)
+        todos.removeAll { t in
+            guard let d = t.deletedAt, !t.dirty else { return false }
+            return d < cutoff
+        }
     }
 
     // MARK: Persistence

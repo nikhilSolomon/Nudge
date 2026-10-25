@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let store = TodoStore()
     private let settings = AppSettings.shared
     private var scheduler: ReminderScheduler!
+    private var sync: SyncService!
     private var quickAdd: QuickAddPanel!
     private let hotkeys = HotkeyManager()
     private var window: NSWindow?
@@ -22,6 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buildMainMenu()
         buildStatusItem()
         applyDockPolicy()
+
+        sync = SyncService(store: store)
 
         scheduler = ReminderScheduler(store: store)
         scheduler.onOpenRequested = { [weak self] in self?.showMainWindow() }
@@ -126,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             w.title = "Nudge Settings"
             w.isReleasedWhenClosed = false
-            w.contentView = NSHostingView(rootView: SettingsView(notifications: scheduler.notifications))
+            w.contentView = NSHostingView(rootView: SettingsView(notifications: scheduler.notifications, sync: sync))
             w.center()
             settingsWindow = w
         }

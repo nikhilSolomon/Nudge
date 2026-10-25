@@ -5,6 +5,7 @@ import AppKit
 struct SettingsView: View {
     @ObservedObject var settings = AppSettings.shared
     var notifications: NotificationService
+    var sync: SyncService
 
     var body: some View {
         TabView {
@@ -14,8 +15,10 @@ struct SettingsView: View {
                 .tabItem { Label("Reminders", systemImage: "bell") }
             QuickAddSettings(settings: settings)
                 .tabItem { Label("Quick Add", systemImage: "keyboard") }
+            AccountSettings(settings: settings, sync: sync)
+                .tabItem { Label("Account", systemImage: "person.crop.circle") }
         }
-        .frame(width: 480, height: 400)
+        .frame(width: 480, height: 440)
     }
 }
 
@@ -203,5 +206,103 @@ private struct QuickAddSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+
+// MARK: - Account / Sync
+
+private struct AccountSettings: View {
+    @ObservedObject var settings: AppSettings
+    @ObservedObject var sync: SyncService
+
+    @State private var email = ""
+    @State private var password = ""
+    @State private var busy = false
+    @State private var message: String?
+
+    var body: some View {
+        Form {
+            Section("Supabase project") {
+                TextField("Project URL", text: $settings.supabaseURL, prompt: Text("https://xxxx.supabase.co"))
+                    .textContentType(.URL)
+                    .autocorrectionDisabled()
+                SecureField("anon public key", text: $settings.supabaseAnonKey, prompt: Text("eyJ…"))
+                Text("Free at supabase.com. One-time setup steps are in docs/SYNC.md in the project folder.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if sync.isSignedIn {
+                Section("Account") {
+                    LabeledContent("Signed in as", value: sync.accountEmail ?? "—")
+                    LabeledContent("Status", value: statusText)
+                    if let at = sync.lastSyncAt {
+                        LabeledContent("Last sync", value: at.reminderDescription)
+                    }
+                    HStack {
+                        Button("Sync Now") { Task { await sync.syncNow() } }
+                            .disabled(sync.status == .syncing)
+                        Spacer()
+                        Button("Sign Out", role: .destructive) { sync.signOut() }
+                    }
+                }
+            } else {
+                Section("Sign in") {
+                    TextField("Email", text: $email)
+                        .textContentType(.username)
+                        .autocorrectionDisabled()
+                    SecureField("Password", text: $password)
+                        .textContentType(.password)
+                    HStack {
+                        Button("Create Account") { run { await sync.signUp(email: email, password: password) } }
+                        Spacer()
+                        Button("Sign In") { run { await sync.signIn(email: email, password: password) } }
+                            .buttonStyle(.borderedProminent)
+                            .keyboardShortcut(.defaultAction)
+                    }
+                    .disabled(busy || !sync.isConfigured || email.isEmpty || password.count < 6)
+                    if !sync.isConfigured {
+                        Text("Fill in the project URL and anon key above first.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else if password.count > 0 && password.count < 6 {
+                        Text("Password must be at least 6 characters.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            if let message {
+                Section {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(message.hasPrefix("Account created") ? Color.secondary : Color.red)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var statusText: String {
+        switch sync.status {
+        case .notConfigured: return "Not configured"
+        case .signedOut: return "Signed out"
+        case .idle: return "Up to date"
+        case .syncing: return "Syncing…"
+        case .error(let msg): return "Error: \(msg)"
+        }
+    }
+
+    private func run(_ op: @escaping () async -> String?) {
+        busy = true
+        message = nil
+        Task {
+            let result = await op()
+            busy = false
+            message = result
+            if result == nil { password = "" }
+        }
     }
 }

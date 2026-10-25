@@ -77,6 +77,12 @@ struct Todo: Identifiable, Codable, Equatable {
     /// Snoozing moves `reminderAt` forward and clears this so it fires again.
     var lastFiredAt: Date?
     var repeatRule: RepeatRule
+    /// Last modification (any field that syncs). Drives last-write-wins between devices.
+    var updatedAt: Date
+    /// Tombstone: set instead of removing the row so the delete reaches other devices.
+    var deletedAt: Date?
+    /// Local-only: has a change that hasn't been pushed to the server yet.
+    var dirty: Bool
 
     init(title: String, notes: String = "", reminderAt: Date? = nil, repeatRule: RepeatRule = .none) {
         self.id = UUID()
@@ -86,7 +92,11 @@ struct Todo: Identifiable, Codable, Equatable {
         self.createdAt = Date()
         self.reminderAt = reminderAt
         self.repeatRule = reminderAt == nil ? .none : repeatRule
+        self.updatedAt = createdAt
+        self.dirty = true
     }
+
+    var isDeleted: Bool { deletedAt != nil }
 
     var hasReminder: Bool { reminderAt != nil }
     var repeats: Bool { repeatRule != .none && reminderAt != nil }
@@ -98,7 +108,7 @@ struct Todo: Identifiable, Codable, Equatable {
 
     /// True when the reminder time has passed and the overlay hasn't been shown for it yet.
     var isDueToFire: Bool {
-        guard !isDone, let r = reminderAt, r <= Date() else { return false }
+        guard !isDone, !isDeleted, let r = reminderAt, r <= Date() else { return false }
         if let fired = lastFiredAt { return fired < r }
         return true
     }
@@ -106,6 +116,7 @@ struct Todo: Identifiable, Codable, Equatable {
     // Tolerant decoding so older todos.json files (without notes/repeat) still load.
     enum CodingKeys: String, CodingKey {
         case id, title, notes, isDone, createdAt, completedAt, reminderAt, lastFiredAt, repeatRule
+        case updatedAt, deletedAt, dirty
     }
 
     init(from decoder: Decoder) throws {
@@ -119,6 +130,10 @@ struct Todo: Identifiable, Codable, Equatable {
         reminderAt = try c.decodeIfPresent(Date.self, forKey: .reminderAt)
         lastFiredAt = try c.decodeIfPresent(Date.self, forKey: .lastFiredAt)
         repeatRule = try c.decodeIfPresent(RepeatRule.self, forKey: .repeatRule) ?? .none
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
+        deletedAt = try c.decodeIfPresent(Date.self, forKey: .deletedAt)
+        // Pre-sync files: treat everything as needing a first push.
+        dirty = try c.decodeIfPresent(Bool.self, forKey: .dirty) ?? true
     }
 }
 

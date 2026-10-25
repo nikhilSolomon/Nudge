@@ -79,6 +79,10 @@ final class AppSettings: ObservableObject {
     @Published var chimeRepeatSeconds: Int { didSet { d.set(chimeRepeatSeconds, forKey: "chimeRepeatSeconds") } }
     @Published var snoozeMinutes: [Int] { didSet { d.set(snoozeMinutes, forKey: "snoozeMinutes") } }
 
+    // Sync (Supabase project; see docs/SYNC.md)
+    @Published var supabaseURL: String { didSet { d.set(supabaseURL, forKey: "supabaseURL") } }
+    @Published var supabaseAnonKey: String { didSet { d.set(supabaseAnonKey, forKey: "supabaseAnonKey") } }
+
     // Quick Add
     @Published var hotkeyEnabled: Bool { didSet { d.set(hotkeyEnabled, forKey: "hotkeyEnabled") } }
     @Published var hotkey: HotkeyOption { didSet { d.set(hotkey.rawValue, forKey: "hotkey") } }
@@ -122,6 +126,8 @@ final class AppSettings: ObservableObject {
         chimeRepeatSeconds = d.integer(forKey: "chimeRepeatSeconds")
         let mins = d.array(forKey: "snoozeMinutes") as? [Int] ?? [5, 15, 60]
         snoozeMinutes = mins.count == 3 ? mins : [5, 15, 60]
+        supabaseURL = d.string(forKey: "supabaseURL") ?? ""
+        supabaseAnonKey = d.string(forKey: "supabaseAnonKey") ?? ""
         hotkeyEnabled = d.bool(forKey: "hotkeyEnabled")
         hotkey = HotkeyOption(rawValue: d.string(forKey: "hotkey") ?? "") ?? .optCmdN
     }
