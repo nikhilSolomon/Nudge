@@ -255,7 +255,7 @@ private fun AccountSection() {
             label = { Text("Supabase project URL") }, placeholder = { Text("https://xxxx.supabase.co") },
             singleLine = true, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(value = s.supabaseAnonKey, onValueChange = { v -> settings.update { it.copy(supabaseAnonKey = v) } },
-            label = { Text("anon public key") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+            label = { Text("Publishable (anon) key") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
             visualTransformation = PasswordVisualTransformation())
         Text("Free at supabase.com; setup steps are in docs/SYNC.md in the project.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

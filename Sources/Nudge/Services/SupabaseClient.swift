@@ -134,8 +134,11 @@ final class SupabaseClient {
         req.setValue(anonKey, forHTTPHeaderField: "apikey")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        let token = bearer ?? (authenticated ? session?.accessToken : nil) ?? anonKey
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        // Signed-in calls carry the user's JWT. Unauthenticated calls (sign-in, sign-up) send only the
+        // apikey header: the new sb_publishable_… keys are not JWTs and must not be used as a bearer token.
+        if let token = bearer ?? (authenticated ? session?.accessToken : nil) {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
         if let body { req.httpBody = try JSONSerialization.data(withJSONObject: body) }
         if let jsonBody { req.httpBody = try JSONSerialization.data(withJSONObject: jsonBody) }

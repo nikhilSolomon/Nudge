@@ -133,12 +133,14 @@ class SupabaseClient(context: Context, baseUrl: String, private val anonKey: Str
                 "${java.net.URLEncoder.encode(it.key, "UTF-8")}=${java.net.URLEncoder.encode(it.value, "UTF-8")}"
             })
         }
-        val token = bearer ?: (if (auth) session?.accessToken else null) ?: anonKey
+        // Signed-in calls carry the user's JWT. Unauthenticated calls send only the apikey header:
+        // the new sb_publishable_… keys are not JWTs and must not be used as a bearer token.
+        val token = bearer ?: (if (auth) session?.accessToken else null)
         val payload = bodyText ?: body?.toString()
         val req = Request.Builder()
             .url(urlBuilder.toString())
             .header("apikey", anonKey)
-            .header("Authorization", "Bearer $token")
+            .apply { if (token != null) header("Authorization", "Bearer $token") }
             .header("Accept", "application/json")
             .apply { headers.forEach { (k, v) -> header(k, v) } }
             .method(method, payload?.toRequestBody(json) ?: if (method == "POST") "".toRequestBody(json) else null)

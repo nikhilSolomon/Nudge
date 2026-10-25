@@ -12,10 +12,11 @@ HTTPS calls, so there is no SDK to install.
    [`supabase/schema.sql`](../supabase/schema.sql) and press **Run**.
 3. Open **Authentication → Sign In / Providers → Email** and turn **Confirm email** *off*
    (otherwise you have to click a link in a verification email before the first sign-in works).
-4. Open **Project Settings → API** and copy two values:
+4. Open **Project Settings → API Keys** and copy two values:
    - **Project URL** (looks like `https://abcdefgh.supabase.co`)
-   - **anon public** key (a long `eyJ…` string). This key is safe to put in the apps; row-level
-     security means each signed-in user can only see their own rows.
+   - the **Publishable key** (`sb_publishable_…`; older projects show a legacy **anon** `eyJ…` key,
+     which works too). This key is safe to put in the apps; row-level security means each signed-in
+     user can only see their own rows.
 
 ## Connect the apps
 

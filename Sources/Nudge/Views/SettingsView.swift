@@ -227,7 +227,7 @@ private struct AccountSettings: View {
                 TextField("Project URL", text: $settings.supabaseURL, prompt: Text("https://xxxx.supabase.co"))
                     .textContentType(.URL)
                     .autocorrectionDisabled()
-                SecureField("anon public key", text: $settings.supabaseAnonKey, prompt: Text("eyJ…"))
+                SecureField("Publishable (anon) key", text: $settings.supabaseAnonKey, prompt: Text("sb_publishable_… or eyJ…"))
                 Text("Free at supabase.com. One-time setup steps are in docs/SYNC.md in the project folder.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
