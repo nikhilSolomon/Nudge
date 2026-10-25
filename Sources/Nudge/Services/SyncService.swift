@@ -19,9 +19,10 @@ final class SyncService: ObservableObject {
     private var pushDebounce: DispatchWorkItem?
     private var periodic: Timer?
     private var inFlight = false
+    /// Server-side synced_at of the newest row we've pulled. Keyed v2 so older installs re-pull everything.
     private var lastPullCursor: Date? {
-        get { UserDefaults.standard.object(forKey: "sync.lastPullCursor") as? Date }
-        set { UserDefaults.standard.set(newValue, forKey: "sync.lastPullCursor") }
+        get { UserDefaults.standard.object(forKey: "sync.cursor.v2") as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: "sync.cursor.v2") }
     }
 
     init(store: TodoStore) {
@@ -132,29 +133,31 @@ final class SyncService: ObservableObject {
         defer { inFlight = false }
 
         do {
-            // 1. Pull everything changed since the last cursor and merge (newer wins).
-            var query: [String: String] = ["order": "updated_at.asc"]
+            // 1. Pull everything that reached the server since the last cursor; merge (newer updated_at wins).
+            //    The cursor is the server's synced_at, so rows edited long ago or offline are never skipped.
+            var query: [String: String] = ["order": "synced_at.asc"]
             if let cursor = lastPullCursor {
-                query["updated_at"] = "gt.\(PostgresDate.string(cursor))"
+                query["synced_at"] = "gt.\(PostgresDate.string(cursor))"
             }
-            let data = try await client.select(table: "todos", query: query)
-            let rows = (try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]) ?? []
+            let rows: [[String: Any]]
+            do {
+                let data = try await client.select(table: "todos", query: query)
+                rows = (try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]) ?? []
+            } catch let e as SupabaseError where e.message.contains("synced_at") {
+                status = .error("Run supabase/migrate-synced-at.sql in the Supabase SQL editor.")
+                return
+            }
             let remotes = rows.compactMap(Self.todo(fromRow:))
             store.applyRemote(remotes)
-            if let newest = remotes.map(\.updatedAt).max() {
+            if let newest = rows.compactMap({ PostgresDate.parse($0["synced_at"] as? String) }).max() {
                 lastPullCursor = newest
             }
 
-            // 2. Push local changes.
+            // 2. Push local changes. (They come back on the next pull with an equal updated_at and are ignored.)
             let dirty = store.dirtyTodos
             if !dirty.isEmpty {
                 try await client.upsert(table: "todos", rows: dirty.map(Self.row(from:)))
                 store.markPushed(dirty)
-                // Our own writes are now the newest rows; move the cursor past them so the next
-                // pull doesn't echo them back.
-                if let newest = dirty.map(\.updatedAt).max(), newest > (lastPullCursor ?? .distantPast) {
-                    lastPullCursor = newest
-                }
             }
 
             store.purgeTombstones()

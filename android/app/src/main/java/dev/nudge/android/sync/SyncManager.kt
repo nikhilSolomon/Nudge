@@ -22,6 +22,9 @@ import org.json.JSONObject
 
 enum class SyncStatus { NOT_CONFIGURED, SIGNED_OUT, IDLE, SYNCING, ERROR }
 
+/** Keyed v2 so installs that synced by updated_at re-pull everything once. */
+private const val CURSOR_KEY = "cursor2"
+
 data class SyncState(
     val status: SyncStatus = SyncStatus.NOT_CONFIGURED,
     val error: String? = null,
@@ -93,7 +96,7 @@ class SyncManager(private val context: Context, private val repo: TodoRepository
     }
 
     private suspend fun afterAuth(email: String) {
-        prefs.edit().remove("cursor").apply()
+        prefs.edit().remove(CURSOR_KEY).apply()
         repo.markAllDirty()
         _state.value = _state.value.copy(status = SyncStatus.IDLE, email = email, error = null)
         syncNow()
@@ -101,7 +104,7 @@ class SyncManager(private val context: Context, private val repo: TodoRepository
 
     fun signOut() {
         scope.launch(Dispatchers.IO) { client?.signOut() }
-        prefs.edit().remove("cursor").apply()
+        prefs.edit().remove(CURSOR_KEY).apply()
         _state.value = _state.value.copy(
             status = if (client == null) SyncStatus.NOT_CONFIGURED else SyncStatus.SIGNED_OUT, email = null, error = null)
     }
@@ -124,24 +127,32 @@ class SyncManager(private val context: Context, private val repo: TodoRepository
         try {
             _state.value = _state.value.copy(status = SyncStatus.SYNCING, error = null)
 
-            // 1. pull
-            val cursor = prefs.getLong("cursor", -1L).takeIf { it > 0 }
-            val query = mutableMapOf("order" to "updated_at.asc")
-            if (cursor != null) query["updated_at"] = "gt.${Dates.iso(cursor)}"
-            val rows = c.select("todos", query)
+            // 1. pull everything that reached the server since the cursor. The cursor is the server's
+            //    synced_at (set by trigger), so rows edited long ago or offline are never skipped.
+            val cursor = prefs.getLong(CURSOR_KEY, -1L).takeIf { it > 0 }
+            val query = mutableMapOf("order" to "synced_at.asc")
+            if (cursor != null) query["synced_at"] = "gt.${Dates.iso(cursor)}"
+            val rows = try {
+                c.select("todos", query)
+            } catch (e: SupabaseException) {
+                if (e.message?.contains("synced_at") == true) {
+                    _state.value = _state.value.copy(status = SyncStatus.ERROR,
+                        error = "Run supabase/migrate-synced-at.sql in the Supabase SQL editor.")
+                    return@withContext
+                }
+                throw e
+            }
             val remotes = (0 until rows.length()).mapNotNull { fromRow(rows.getJSONObject(it)) }
             repo.applyRemote(remotes)
-            var newCursor = remotes.maxOfOrNull { it.updatedAt } ?: cursor
+            val newestSynced = (0 until rows.length()).mapNotNull { Dates.parseIso(rows.getJSONObject(it).optString("synced_at", null)) }.maxOrNull()
+            if (newestSynced != null) prefs.edit().putLong(CURSOR_KEY, newestSynced).apply()
 
-            // 2. push
+            // 2. push (rows echo back on the next pull with an equal updated_at and are ignored)
             val dirty = repo.dirtyTodos()
             if (dirty.isNotEmpty()) {
                 c.upsert("todos", JSONArray().apply { dirty.forEach { put(toRow(it)) } })
                 repo.markPushed(dirty)
-                val newest = dirty.maxOf { it.updatedAt }
-                if (newCursor == null || newest > newCursor) newCursor = newest
             }
-            if (newCursor != null) prefs.edit().putLong("cursor", newCursor).apply()
 
             repo.purgeTombstones()
             _state.value = _state.value.copy(status = SyncStatus.IDLE, lastSyncAt = System.currentTimeMillis(), error = null)
